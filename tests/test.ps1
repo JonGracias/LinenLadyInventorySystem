@@ -22,8 +22,8 @@ $ErrorActionPreference = "Stop"
 # Config
 # -----------------------------
 $BaseUrl = "http://localhost:7071"
-$test = "test8"
-$Img1 = Join-Path $PSScriptRoot "/test-images/$test.jpg"
+$test = "test9"
+$Img1 = Join-Path $PSScriptRoot "/test-images/$test.png"
 
 if (!(Test-Path $Img1)) { throw "Missing file: $Img1" }
 

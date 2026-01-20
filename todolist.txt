@@ -1,0 +1,180 @@
+## Checklist: remaining work (Option 1 = `InventoryImages.IsPrimary`)
+
+### 1) Data model / DB constraints
+
+* [ ] Ensure `inv.InventoryImages` has:
+
+  * [ ] `InventoryImageId` (PK)
+  * [ ] `InventoryId` (FK)
+  * [ ] `IsPrimary` (bit)
+  * [ ] `SortOrder` (int)
+  * [ ] `IsDeleted` (bit)
+* [ ] Add filtered unique index to enforce **one primary per item**:
+
+  * [ ] `UNIQUE (InventoryId) WHERE IsPrimary=1 AND IsDeleted=0`
+* [ ] Decide whether to also enforce a `SortOrder` uniqueness per item (optional):
+
+  * [ ] `UNIQUE (InventoryId, SortOrder) WHERE IsDeleted=0`
+
+---
+
+### 2) Backend API (Azure Functions)
+
+#### 2.1 Read draft (for editor page)
+
+* [ ] Confirm endpoint exists to read a draft by id and returns:
+
+  * [ ] item fields (`name`, `description`, `quantityOnHand`, `unitPriceCents`, `isDraft`)
+  * [ ] images list with `imageId`, `imagePath` (and/or read URL), `isPrimary`, `sortOrder`
+
+#### 2.2 Update draft fields (already exists)
+
+* [ ] Confirm `PATCH /api/items/{id}` works for:
+
+  * [ ] name
+  * [ ] description (including clearing to `null`)
+  * [ ] quantityOnHand
+  * [ ] unitPriceCents
+
+#### 2.3 Set primary image (new)
+
+* [ ] Add endpoint:
+
+  * [ ] `POST /api/items/{id}/images/{imageId}/set-primary`
+* [ ] Implementation requirements:
+
+  * [ ] Validate image belongs to the item
+  * [ ] Transaction:
+
+    * [ ] set all images `IsPrimary=0`
+    * [ ] set chosen image `IsPrimary=1`
+  * [ ] Return updated item/images or success payload
+
+#### 2.4 AiPrefill should accept selected image IDs (new)
+
+* [ ] Extend AiPrefill request body to accept:
+
+  * [ ] `imageIds: int[]`
+* [ ] Logic:
+
+  * [ ] if `imageIds` provided → use those images (respect `MaxImages`)
+  * [ ] else → fallback to existing “first N by SortOrder”
+* [ ] Ensure the endpoint variants still work:
+
+  * [ ] `/ai-prefill`
+  * [ ] `/title/ai-prefill`
+  * [ ] `/description/ai-prefill`
+  * [ ] `/price/ai-prefill`
+
+#### 2.5 Publish pipeline changes
+
+* [ ] Remove vector refresh from create-draft flow
+* [ ] Publish endpoint should:
+
+  * [ ] set draft→published state (`IsDraft=false`, `IsActive=true` etc.)
+  * [ ] call vectors refresh (`/vectors/refresh`) **after publish**
+  * [ ] generate publish artifacts (next section)
+
+---
+
+### 3) Publish artifacts (HTML node + Square JSON)
+
+#### 3.1 Storage
+
+* [ ] Add table `inv.InventoryPublishArtifacts` with:
+
+  * [ ] `ArtifactId` PK
+  * [ ] `InventoryId` FK
+  * [ ] `Version` (or `CreatedAtUtc`)
+  * [ ] `HtmlSnippet` (nvarchar(max))
+  * [ ] `SquareJson` (nvarchar(max))
+  * [ ] optional: `ImageIdsJson` (nvarchar(max)) storing selected image IDs/roles
+* [ ] Decide versioning rule:
+
+  * [ ] incrementing integer per inventory item **or**
+  * [ ] timestamp-only versions
+
+#### 3.2 Artifact generation logic (backend)
+
+* [ ] Define the canonical “published view model”:
+
+  * [ ] primary image = `IsPrimary=1` (fallback to first by sortOrder)
+  * [ ] title/name, description, price, sku
+* [ ] Generate HTML snippet:
+
+  * [ ] deterministic markup
+  * [ ] safe escaping / no untrusted HTML injection
+* [ ] Generate Square JSON:
+
+  * [ ] stable schema (your own `linenlady.square.item.v1`)
+  * [ ] include money fields, sku, image URLs, quantity, metadata
+* [ ] Save artifact row on publish
+* [ ] Return artifact info in publish response (artifactId/version)
+
+---
+
+### 4) Next.js Admin routes (proxy)
+
+* [ ] `GET /admin/api/drafts/{id}` → backend read
+* [ ] `PATCH /admin/api/drafts/{id}` → UpdateItem
+* [ ] `POST /admin/api/drafts/{id}/ai-prefill` → AiPrefill endpoints (supports `imageIds`)
+* [ ] `POST /admin/api/drafts/{id}/images/{imageId}/set-primary` → new backend endpoint
+* [ ] `POST /admin/api/drafts/{id}/publish` → orchestrates:
+
+  * [ ] publish
+  * [ ] vectors refresh
+  * [ ] publish-artifacts generation/save
+
+---
+
+### 5) Admin UI pages
+
+#### 5.1 Draft list (if not already)
+
+* [ ] List drafts and link to `/admin/drafts/[id]`
+
+#### 5.2 Draft editor page `/admin/drafts/[id]/page.tsx`
+
+* [ ] Editable fields:
+
+  * [ ] title/name
+  * [ ] description
+  * [ ] quantity on hand
+  * [ ] price
+* [ ] Images panel:
+
+  * [ ] “Make primary” button per image
+  * [ ] select exactly 2 images for AI prefill
+* [ ] AI prefill button:
+
+  * [ ] sends `imageIds: [a,b]`
+  * [ ] updates UI with returned item fields
+* [ ] Publish button:
+
+  * [ ] triggers publish pipeline
+  * [ ] shows artifact created (optional), navigates back or to published view
+
+---
+
+### 6) Testing / scripts
+
+* [ ] Add a PowerShell test script covering:
+
+  * [ ] create draft + upload images
+  * [ ] set primary image
+  * [ ] update fields
+  * [ ] ai-prefill with imageIds
+  * [ ] publish → vectors refresh → artifacts saved
+* [ ] Add at least one regression test for:
+
+  * [ ] “only one primary image” enforced (index + endpoint behavior)
+
+---
+
+If you want the shortest path: implement in this order:
+
+1. filtered unique index
+2. set-primary endpoint + UI button
+3. ai-prefill `imageIds` support
+4. publish pipeline moves vectors refresh to publish
+5. publish-artifacts table + generation + save
